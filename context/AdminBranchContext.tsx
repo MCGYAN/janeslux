@@ -1,7 +1,6 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import { supabase } from '@/lib/supabase';
 
 export interface AdminBranch {
   id: string;
@@ -33,12 +32,25 @@ export function AdminBranchProvider({ children }: { children: ReactNode }) {
 
   const refreshBranches = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('branches')
-        .select('id, name, slug, address, phone, is_active, sort_order')
-        .order('sort_order', { ascending: true });
-      if (error) throw error;
-      const list = (data || []) as AdminBranch[];
+      // Load via server-side API routes (service role) rather than the browser
+      // Supabase SDK, which is not reliable on all deployments.
+      let list: AdminBranch[] = [];
+      const res = await fetch('/api/admin/branches', { credentials: 'include' });
+      if (res.ok) {
+        const json = await res.json();
+        list = (json.branches || []) as AdminBranch[];
+      } else {
+        // Fallback: public endpoint (active branches only)
+        const pubRes = await fetch('/api/storefront/branches', { cache: 'no-store' });
+        if (pubRes.ok) {
+          const pub = await pubRes.json();
+          list = (Array.isArray(pub) ? pub : []).map((b: any, i: number) => ({
+            ...b,
+            is_active: true,
+            sort_order: b.sort_order ?? i,
+          })) as AdminBranch[];
+        }
+      }
       setBranches(list);
 
       // Restore saved selection (if branch still exists)

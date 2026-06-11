@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
 import { useAdminBranch } from '@/context/AdminBranchContext';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -75,14 +74,13 @@ export default function AdminDashboard() {
         setLoading(true);
         const branchId = selectedBranch?.id || null;
 
-        // 1. Fetch ALL Orders for count & customers (scoped to branch if selected)
-        let ordersQuery = supabase
-          .from('orders')
-          .select('total, status, payment_status, created_at, email, branch_id');
-        if (branchId) ordersQuery = ordersQuery.eq('branch_id', branchId);
-        const { data: allOrdersData, error: ordersError } = await ordersQuery;
+        // Server-side API (service role) — works regardless of client Supabase config
+        const branchQuery = branchId ? `?branch=${encodeURIComponent(branchId)}` : '';
+        const res = await fetch(`/api/admin/dashboard${branchQuery}`, { credentials: 'include' });
+        const dash = await res.json();
+        if (!res.ok) throw new Error(dash.error || 'Failed to load dashboard data');
 
-        if (ordersError) throw ordersError;
+        const allOrdersData: any[] = dash.orders || [];
 
         // Only count PAID orders for revenue & avg order value
         const paidOrders = allOrdersData?.filter(o => o.payment_status === 'paid') || [];
@@ -158,15 +156,8 @@ export default function AdminDashboard() {
           }
         ]);
 
-        // 3. Fetch Recent Orders (only paid orders, scoped to branch if selected)
-        let recentQuery = supabase
-          .from('orders')
-          .select('id, order_number, user_id, email, created_at, total, status, shipping_address')
-          .eq('payment_status', 'paid')
-          .order('created_at', { ascending: false })
-          .limit(5);
-        if (branchId) recentQuery = recentQuery.eq('branch_id', branchId);
-        const { data: recentOrdersData } = await recentQuery;
+        // 3. Recent Orders (only paid orders, scoped to branch if selected)
+        const recentOrdersData = dash.recentOrders || [];
 
         if (recentOrdersData) {
           const formattedRecent = recentOrdersData.map((o: any) => {
@@ -188,60 +179,22 @@ export default function AdminDashboard() {
           setRecentOrders(formattedRecent);
         }
 
-        // 4. Fetch Low Stock Products (per-branch stock when a branch is selected)
-        if (branchId) {
-          const { data: lowStockData } = await supabase
-            .from('branch_inventory')
-            .select('quantity, products(name)')
-            .eq('branch_id', branchId)
-            .lt('quantity', 10)
-            .order('quantity', { ascending: true })
-            .limit(5);
+        // 4. Low Stock Products (per-branch stock when a branch is selected)
+        setLowStockProducts((dash.lowStock || []).map((p: any) => ({
+          name: p.name,
+          stock: p.quantity,
+          status: p.quantity === 0 ? 'critical' : 'low'
+        })));
 
-          if (lowStockData) {
-            setLowStockProducts(lowStockData.map((row: any) => ({
-              name: row.products?.name || 'Unknown product',
-              stock: row.quantity,
-              status: row.quantity === 0 ? 'critical' : 'low'
-            })));
-          }
-        } else {
-          const { data: lowStockData } = await supabase
-            .from('products')
-            .select('name, quantity')
-            .lt('quantity', 10)
-            .limit(5);
-
-          if (lowStockData) {
-            setLowStockProducts(lowStockData.map((p: any) => ({
-              name: p.name,
-              stock: p.quantity,
-              status: p.quantity === 0 ? 'critical' : 'low'
-            })));
-          }
-        }
-
-        // 5. Fetch Top Products (Approximation: High Price or just Random for now, 
-        // real top selling requires aggregation on order_items which is complex for client-side)
-        const { data: productData } = await supabase
-          .from('products')
-          .select('*, product_images(url), branch_inventory(branch_id, quantity)')
-          .limit(4);
-        if (productData) {
-          setTopProducts(productData.map((p: any) => {
-            const branchRow = branchId
-              ? (p.branch_inventory || []).find((r: any) => r.branch_id === branchId)
-              : null;
-            return {
-              id: p.slug, // Use slug for link
-              name: p.name,
-              image: p.product_images?.[0]?.url || 'https://via.placeholder.com/200',
-              sales: 0, // Mocked for now
-              revenue: 0, // Mocked for now
-              stock: branchId ? (branchRow?.quantity ?? 0) : p.quantity
-            };
-          }));
-        }
+        // 5. Products preview cards
+        setTopProducts((dash.products || []).map((p: any) => ({
+          id: p.slug, // Use slug for link
+          name: p.name,
+          image: p.image || 'https://via.placeholder.com/200',
+          sales: 0, // Mocked for now
+          revenue: 0, // Mocked for now
+          stock: p.quantity
+        })));
 
       } catch (error) {
         console.error('Error loading dashboard:', error);

@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
 import { useAdminBranch } from '@/context/AdminBranchContext';
 
 export default function InventoryManagementPage() {
@@ -29,22 +28,12 @@ export default function InventoryManagementPage() {
   const fetchInventory = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('products')
-        .select(`
-          id,
-          name,
-          sku,
-          price,
-          quantity,
-          categories(name),
-          branch_inventory(branch_id, quantity)
-        `)
-        .order('name');
+      // Server-side API (service role) — works regardless of client Supabase config
+      const res = await fetch('/api/admin/products?sortBy=name', { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to load inventory');
 
-      if (error) throw error;
-
-      if (data) {
+      if (Array.isArray(data)) {
         const mapped = data.map((p: any) => {
           const branchRows: any[] = p.branch_inventory || [];
           const branchRow = selectedBranch
@@ -64,13 +53,11 @@ export default function InventoryManagementPage() {
               quantity: branchRows.find((r: any) => r.branch_id === b.id)?.quantity ?? 0,
             }));
 
-          // categories is an array from the join
-          const categoryData = p.categories as { name: string }[] | null;
           return {
             id: p.id,
             name: p.name,
             sku: p.sku || 'N/A',
-            category: categoryData?.[0]?.name || 'Uncategorized',
+            category: p.category || p.categories?.name || 'Uncategorized',
             currentStock: stock,
             branchBreakdown,
             reorderLevel: 10, // Default
